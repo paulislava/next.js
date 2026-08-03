@@ -268,6 +268,10 @@ export type NodeJsHmrUpdate =
   | NodeJsPartialHmrUpdate
   | NodeJsRestartHmrUpdate
 
+export interface NodeJsHmrBaseline {
+  type: 'baseline'
+}
+
 export interface HmrChunkNames {
   /** Relative paths to output chunks that can receive HMR updates (e.g., "server/chunks/ssr/..._.js") */
   chunkNames: string[]
@@ -334,11 +338,11 @@ export interface Project {
     TurbopackResult<RawEntrypoints | {}>
   >
 
-  // Note: only the Server target is implemented in the native binding;
-  // add a Client overload once `all_hmr_update` supports it.
-  allHmrEvents(
-    target: import('./index').HmrTarget.Server
-  ): AsyncIterableIterator<TurbopackResult<NodeJsHmrUpdate>>
+  entrypoints(): Promise<TurbopackResult<RawEntrypoints | null>>
+
+  getServerHmrUpdate(): Promise<
+    TurbopackResult<NodeJsHmrUpdate | NodeJsHmrBaseline>
+  >
 
   hmrEvents(
     identifier: string,

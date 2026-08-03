@@ -28,6 +28,7 @@ import type {
   Endpoint,
   HmrChunkNames,
   Lockfile,
+  NodeJsHmrBaseline,
   NodeJsHmrUpdate,
   PartialProjectOptions,
   Project,
@@ -762,14 +763,21 @@ function bindingToApi(
       })()
     }
 
-    // Note: only the Server target is implemented in the native binding;
-    // add a Client overload once `all_hmr_update` supports it.
-    allHmrEvents(
-      target: HmrTarget.Server
-    ): AsyncIterableIterator<TurbopackResult<NodeJsHmrUpdate>> {
-      return subscribe(true, async (callback) =>
-        binding.projectAllHmrEvents(this._nativeProject, target, callback)
-      )
+    async entrypoints(): Promise<TurbopackResult<RawEntrypoints | null>> {
+      const entrypoints = (await binding.projectEntrypoints(
+        this._nativeProject
+      )) as TurbopackResult<NapiEntrypoints | null>
+      return entrypoints && 'routes' in entrypoints
+        ? napiEntrypointsToRawEntrypoints(entrypoints)
+        : entrypoints
+    }
+
+    async getServerHmrUpdate(): Promise<
+      TurbopackResult<NodeJsHmrUpdate | NodeJsHmrBaseline>
+    > {
+      return binding.projectGetServerHmrUpdate(this._nativeProject) as Promise<
+        TurbopackResult<NodeJsHmrUpdate | NodeJsHmrBaseline>
+      >
     }
 
     hmrEvents(
