@@ -86,13 +86,15 @@ impl AsyncLoaderModule {
         // See `ManifestAsyncModule::chunk_group`: a graph that stops at async references cannot
         // chunk this group, so root it at `inner`. Unlike the manifest path this is not a lazy
         // boundary, so the walk still happens while the referencing chunk is generated -- it just
-        // happens here instead of during graph construction.
+        // happens here instead of during graph construction. Seed it with the parent graph so the
+        // shared modules the parent already covers are referenced from its chunks rather than
+        // re-walked and re-chunked for every async boundary.
         let module_graph = if *self
             .chunking_context
             .is_async_graph_deferral_enabled()
             .await?
         {
-            ModuleGraph::isolated_async_entry(Vc::upcast(*self.inner))
+            ModuleGraph::isolated_async_entry_seeded(Vc::upcast(*self.inner), module_graph)
         } else {
             module_graph
         };

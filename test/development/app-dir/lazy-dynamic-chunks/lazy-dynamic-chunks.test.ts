@@ -75,6 +75,18 @@ const INTERACTIVE_CSS_MARKER = 'interactive-css-marker-5d1c'
       )
     }
 
+    it('keeps server dynamic imports available during the initial render', async () => {
+      const res = await next.fetch('/server-import')
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain('server-dynamic-import')
+    })
+
+    it('renders server next/dynamic imports during the initial render', async () => {
+      const res = await next.fetch('/server-next-dynamic')
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain('server-next-dynamic')
+    })
+
     it('does not emit the dynamic import chunk while compiling the route', async () => {
       // Drive the compile over HTTP rather than a browser so nothing can speculatively request
       // the lazy chunk and materialize it behind the assertion.

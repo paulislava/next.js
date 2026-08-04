@@ -1534,7 +1534,7 @@ impl Project {
                     },
                     /* include_traced */ *self.should_write_nft_manifests().await?,
                     /* include_binding_usage */ self.next_mode().await?.is_production(),
-                    /* defer_async */ *self.defer_async_graph().await?,
+                    /* defer_async */ false,
                 )],
                 None,
             )
@@ -1759,7 +1759,9 @@ impl Project {
             nested_async_chunking: self
                 .next_config()
                 .turbo_nested_async_chunking(self.next_mode(), false),
-            defer_async_graph: self.defer_async_graph(),
+            // Server chunks must exist before the in-process runtime can load them. Client graphs
+            // opt into deferral separately.
+            defer_async_graph: Vc::cell(false),
             debug_ids: self.next_config().turbopack_debug_ids(),
             client_root: self.client_relative_path().owned().await?,
             client_static_folder_name: self

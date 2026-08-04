@@ -728,7 +728,8 @@ impl PageEndpoint {
             let next_mode_ref = next_mode.await?;
             let should_trace = *project.should_write_nft_manifests().await?;
             let should_read_binding_usage = next_mode_ref.is_production();
-            let defer_async = *project.defer_async_graph().await?;
+            // The server runtime loads chunks from disk and cannot materialize a deferred graph.
+            let defer_async = false;
 
             let ssr_chunk_module = self.internal_ssr_chunk_module().await?;
             // Implements layout segment optimization to compute a graph "chain" for document, app,

@@ -73,7 +73,10 @@ impl ManifestAsyncModule {
             .is_async_graph_deferral_enabled()
             .await?
         {
-            ModuleGraph::isolated_async_entry(Vc::upcast(*self.inner))
+            // Seed the isolated graph with the page graph so shared modules are referenced from
+            // the page's chunks rather than re-walked and re-chunked here. This only runs once the
+            // boundary is materialized, so the seeding cost is paid on demand.
+            ModuleGraph::isolated_async_entry_seeded(Vc::upcast(*self.inner), *self.module_graph)
         } else {
             *self.module_graph
         };
@@ -324,16 +327,36 @@ impl EcmascriptChunkPlaceable for ManifestAsyncModule {
     }
 
     #[turbo_tasks::function]
-    fn chunk_item_output_assets(
+    async fn chunk_item_output_assets(
         self: Vc<Self>,
         _chunking_context: Vc<Box<dyn ChunkingContext>>,
         _module_graph: Vc<ModuleGraph>,
-    ) -> Vc<OutputAssetsWithReferenced> {
+    ) -> Result<Vc<OutputAssetsWithReferenced>> {
+        let this = self.await?;
+        // Declaring the target chunks here is what pulls the dynamic import's chunk group onto the
+        // route's compile path: `chunk_group()` (and `hmr_chunk_list()`, which reads it) walk and
+        // chunk the whole subgraph. Deferral exists to put that off, so before the boundary is
+        // materialized this contributes no output assets. The boundary is materialized on demand
+        // when the client requests the manifest chunk (registered eagerly via the loader); from
+        // then on the state below flips and the target chunks are emitted like any other output.
+        if *this
+            .chunking_context
+            .is_async_graph_deferral_enabled()
+            .await?
+            && !async_graph_materialization(*ResolvedVc::upcast(this.inner))
+                .await?
+                .is_materialized()
+        {
+            return Ok(OutputAssetsWithReferenced::from_assets(
+                OutputAssets::empty(),
+            ));
+        }
         // Making the chunk list an output asset of this module is what gets it emitted, alongside
         // the target chunks, when the boundary is materialized.
-        self.chunk_group()
+        Ok(self
+            .chunk_group()
             .concatenate(OutputAssetsWithReferenced::from_assets(
                 self.hmr_chunk_list(),
-            ))
+            )))
     }
 }
