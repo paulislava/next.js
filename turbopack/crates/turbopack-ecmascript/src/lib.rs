@@ -46,6 +46,7 @@ use std::{
     collections::hash_map::Entry,
     fmt::{Debug, Display, Formatter},
     mem::take,
+    ops::Range,
     sync::{Arc, Mutex},
 };
 
@@ -1186,6 +1187,7 @@ impl EcmascriptModuleContent {
             let modules_header_width = modules.len().next_power_of_two().trailing_zeros();
             let content = CodeGenResult {
                 program: merged_ast,
+                merged_prelude: 0..0,
                 source_map: CodeGenResultSourceMap::ScopeHoisting {
                     modules_header_width,
                     lookup_table: lookup_table.clone(),
@@ -1404,15 +1406,18 @@ async fn merge_modules(
         let mut unique_contexts_cache =
             FxHashMap::with_capacity_and_hasher(contents.len() * 5, Default::default());
 
+        let mut merged_prelude = Vec::new();
         let mut prepare_module =
             |module_count: usize,
              current_module_idx: usize,
              (module, content): &(ResolvedVc<Box<dyn EcmascriptChunkPlaceable>>, CodeGenResult),
              program: &mut Program,
+             merged_prelude: &mut Vec<ModuleItem>,
              lookup_table: &mut Vec<ModulePosition>| {
                 let _ = tracing::trace_span!("prepare module").entered();
                 if let CodeGenResult {
                     scope_hoisting_syntax_contexts: Some((module_contexts, _)),
+                    merged_prelude: prelude,
                     ..
                 } = content
                 {
@@ -1434,6 +1439,14 @@ async fn merge_modules(
                         program.visit_mut_with(&mut visitor);
                         visitor.error
                     })?;
+
+                    match program {
+                        Program::Module(module) => {
+                            merged_prelude.extend(module.body.drain(prelude.clone()))
+                        }
+                        Program::Script(script) => merged_prelude
+                            .extend(script.body.drain(prelude.clone()).map(ModuleItem::Stmt)),
+                    }
 
                     Ok(match program.take() {
                         Program::Module(module) => Either::Left(module.body.into_iter()),
@@ -1465,6 +1478,7 @@ async fn merge_modules(
                     i,
                     &contents[i],
                     &mut programs[i],
+                    &mut merged_prelude,
                     &mut lookup_table,
                 )
                 .map_err(|err| (i, err))
@@ -1495,6 +1509,7 @@ async fn merge_modules(
                                         index,
                                         &contents[index],
                                         &mut programs[index],
+                                        &mut merged_prelude,
                                         &mut lookup_table,
                                     )
                                     .map_err(|err| (index, err))?
@@ -1547,7 +1562,7 @@ async fn merge_modules(
 
         let span = tracing::trace_span!("hygiene").entered();
         let mut merged_ast = Program::Module(swc_core::ecma::ast::Module {
-            body: result,
+            body: merged_prelude.into_iter().chain(result).collect(),
             span: DUMMY_SP,
             shebang: None,
         });
@@ -1702,6 +1717,9 @@ impl<'a> ScopeHoistingContext<'a> {
 
 struct CodeGenResult {
     program: Program,
+    /// The statements of `program` that [`merge_modules`] moves in front of the merged module, so
+    /// that a cyclic importer can't re-enter it before they ran.
+    merged_prelude: Range<usize>,
     source_map: CodeGenResultSourceMap,
     comments: CodeGenResultComments,
     is_esm: bool,
@@ -1844,7 +1862,8 @@ async fn process_parse_result(
                 trailing: Default::default(),
             };
 
-            process_content_with_code_gens(&mut program, globals, &mut code_gens);
+            let early_hoisted_count =
+                process_content_with_code_gens(&mut program, globals, &mut code_gens);
 
             for comments in code_gens.iter_mut().flat_map(|cg| cg.comments.as_mut()) {
                 let leading = Arc::unwrap_or_clone(take(&mut comments.leading));
@@ -1858,6 +1877,9 @@ async fn process_parse_result(
                     extra_comments.trailing.entry(pos).or_default().extend(v);
                 }
             }
+
+            // The early hoisted statements start behind the `MERGED MODULE` marker below.
+            let early_hoisted_start = usize::from(prepend_ident_comment.is_some());
 
             GLOBALS.set(globals, || {
                 if let Some(prepend_ident_comment) = prepend_ident_comment {
@@ -1896,6 +1918,11 @@ async fn process_parse_result(
 
             Ok(CodeGenResult {
                 program,
+                merged_prelude: if retain_syntax_context.is_some() {
+                    early_hoisted_start..early_hoisted_start + early_hoisted_count
+                } else {
+                    0..0
+                },
                 source_map: if generate_source_map {
                     CodeGenResultSourceMap::Single {
                         source_map: source_map.clone(),
@@ -1944,6 +1971,7 @@ async fn process_parse_result(
                             body,
                             shebang: None,
                         }),
+                        merged_prelude: 0..0,
                         source_map: CodeGenResultSourceMap::None,
                         comments: CodeGenResultComments::Empty,
                         is_esm: false,
@@ -1973,6 +2001,7 @@ async fn process_parse_result(
                             body,
                             shebang: None,
                         }),
+                        merged_prelude: 0..0,
                         source_map: CodeGenResultSourceMap::None,
                         comments: CodeGenResultComments::Empty,
                         is_esm: false,
@@ -2087,6 +2116,7 @@ async fn emit_content(
 ) -> Result<Vc<EcmascriptModuleContent>> {
     let CodeGenResult {
         program,
+        merged_prelude: _,
         source_map,
         comments,
         is_esm,
@@ -2178,12 +2208,13 @@ async fn emit_content(
     .cell())
 }
 
+/// Applies the code generations, returning the number of early hoisted statements it prepended.
 #[instrument(level = Level::TRACE, skip_all, name = "apply code generation")]
 fn process_content_with_code_gens(
     program: &mut Program,
     globals: &Globals,
     code_gens: &mut Vec<CodeGeneration>,
-) {
+) -> usize {
     let mut visitors = Vec::new();
     let mut root_visitors = Vec::new();
     let mut early_hoisted_stmts = FxIndexMap::default();
@@ -2224,6 +2255,7 @@ fn process_content_with_code_gens(
         }
     });
 
+    let early_hoisted_count = early_hoisted_stmts.len();
     match program {
         Program::Module(ast::Module { body, .. }) => {
             body.splice(
@@ -2254,6 +2286,7 @@ fn process_content_with_code_gens(
             );
         }
     };
+    early_hoisted_count
 }
 
 /// Like `hygiene`, but only renames the Atoms without clearing all SyntaxContexts
