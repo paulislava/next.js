@@ -775,7 +775,11 @@ jobs:
         group: [1/5, 2/5, 3/5, 4/5, 5/5]
 
     uses: ./.github/workflows/build_reusable.yml
+    permissions:
+      contents: read
+      id-token: write
     with:
+      environment: 'deploy-tests'
       # Keep Next.js related env variables in sync with additionalEnv in next-deploy.ts
       afterBuild: |
         export NEXT_ENABLE_ADAPTER=1
@@ -804,7 +808,11 @@ jobs:
         group: [1/5, 2/5, 3/5, 4/5, 5/5]
 
     uses: ./.github/workflows/build_reusable.yml
+    permissions:
+      contents: read
+      id-token: write
     with:
+      environment: 'deploy-tests'
       afterBuild: |
         export __NEXT_CACHE_COMPONENTS=true
         export __NEXT_EXPERIMENTAL_CACHED_NAVIGATIONS=true

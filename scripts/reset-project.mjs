@@ -2,13 +2,21 @@ import fetch from 'node-fetch'
 
 export const TEST_PROJECT_NAME = 'vtest314-e2e-tests'
 export const TEST_TEAM_NAME = process.env.VERCEL_TEST_TEAM
-export const TEST_TOKEN = process.env.VERCEL_TEST_TOKEN
+export const TEST_TOKEN_URL =
+  process.env.DEPLOY_E2E_TEST_TOKEN_URL ??
+  'https://vtest314-e2e-tests-pfy5atx4h-vtest314-next-e2e-tests.vercel.app/deploy-e2e-test-token'
 
 export const ADAPTER_TEST_TEAM_NAME = process.env.VERCEL_ADAPTER_TEST_TEAM
-export const ADAPTER_TEST_TOKEN = process.env.VERCEL_ADAPTER_TEST_TOKEN
+export const ADAPTER_TEST_TOKEN_URL =
+  process.env.DEPLOY_E2E_TEST_ADAPTER_TOKEN_URL ??
+  // TODO: default
+  ''
 
 export const TURBOPACK_TEST_TEAM_NAME = process.env.VERCEL_TURBOPACK_TEST_TEAM
-export const TURBOPACK_TEST_TOKEN = process.env.VERCEL_TURBOPACK_TEST_TOKEN
+export const TURBOPACK_TEST_TOKEN_URL =
+  process.env.DEPLOY_E2E_TEST_TURBOPACK_TOKEN_URL ??
+  // TODO: default
+  ''
 
 /**
  * Retry a fetch request with exponential backoff
@@ -56,6 +64,54 @@ async function fetchWithRetry(
 
   // All retries exhausted
   throw new Error(lastError)
+}
+
+/**
+ * Mint a short-lived Vercel OIDC token by exchanging the job's GitHub OIDC
+ * token at the given exchange endpoint. Requires the job to have the
+ * `id-token: write` permission, which provides the ACTIONS_ID_TOKEN_REQUEST_*
+ * environment variables.
+ */
+export async function mintVercelOidcToken(tokenUrl) {
+  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL
+  const repository = process.env.GITHUB_REPOSITORY
+  if (!requestToken || !requestUrl || !repository) {
+    throw new Error(
+      'Cannot mint a Vercel OIDC token outside of a GitHub Actions job with the `id-token: write` permission.'
+    )
+  }
+
+  // The exchange endpoint expects the audience to be the repository the job
+  // runs in, so the same code works in any repo.
+  const oidcRequestUrl = new URL(requestUrl)
+  oidcRequestUrl.searchParams.set(
+    'audience',
+    `https://github.com/${repository}`
+  )
+  const oidcResponse = await fetchWithRetry(
+    oidcRequestUrl.toString(),
+    { headers: { authorization: `bearer ${requestToken}` } },
+    { operationName: 'GitHub OIDC token request' }
+  )
+  const { value: gitHubOidcToken } = await oidcResponse.json()
+
+  const exchangeResponse = await fetchWithRetry(
+    tokenUrl,
+    { headers: { authorization: `Bearer ${gitHubOidcToken}` } },
+    {
+      // Authorization failures won't fix themselves by retrying.
+      acceptableStatuses: [401, 403],
+      operationName: 'Vercel deploy token exchange',
+    }
+  )
+  if (!exchangeResponse.ok) {
+    throw new Error(
+      `Vercel deploy token exchange failed with status ${exchangeResponse.status}: ${await exchangeResponse.text()}`
+    )
+  }
+  const { token } = await exchangeResponse.json()
+  return token
 }
 
 export async function resetProject({

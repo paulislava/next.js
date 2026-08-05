@@ -346,11 +346,18 @@ export class NextDeployInstance extends NextInstance {
         ? projectEnv.TURBOPACK_TEST_TEAM_NAME
         : projectEnv.TEST_TEAM_NAME
 
-    const TEST_TOKEN = NEXT_ENABLE_ADAPTER
-      ? projectEnv.ADAPTER_TEST_TOKEN
+    const TEST_TOKEN_URL = NEXT_ENABLE_ADAPTER
+      ? projectEnv.ADAPTER_TEST_TOKEN_URL
       : IS_TURBOPACK_TEST
-        ? projectEnv.TURBOPACK_TEST_TOKEN
-        : projectEnv.TEST_TOKEN
+        ? projectEnv.TURBOPACK_TEST_TOKEN_URL
+        : projectEnv.TEST_TOKEN_URL
+
+    // Local deploy runs can provide a Vercel OIDC token directly. In CI each
+    // deploy mints a fresh one from the job's GitHub OIDC token.
+    let TEST_TOKEN = process.env.VERCEL_OIDC_TOKEN ?? null
+    if (TEST_TOKEN === null) {
+      TEST_TOKEN = await projectEnv.mintVercelOidcToken(TEST_TOKEN_URL)
+    }
 
     // If the team name is available in the environment, use it as the scope.
     if (TEST_TEAM_NAME) {
